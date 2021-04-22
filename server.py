@@ -5,11 +5,11 @@ import os
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from asyncio.subprocess import Process, STDOUT
 
 from aiohttp import web
+from aiopath import AsyncPath as Path
 from zipstream import AioZipStream
 
 SERVER_START_SCRIPT = "start_server_bepinex.sh"
@@ -79,13 +79,14 @@ class ValheimServer:
 
             worlds_path = Path(self.worlds_dir)
 
-            files = [
-                {
-                    "name": str(file_path.relative_to(worlds_path)),
-                    "file": str(file_path),
-                }
-                for file_path in worlds_path.glob("**/*")
-            ]
+            files = []
+            async for file_path in worlds_path.glob("**/*"):
+                files.append(
+                    {
+                        "name": str(file_path.relative_to(worlds_path)),
+                        "file": str(file_path),
+                    }
+                )
 
             zip_stream = AioZipStream(files=files)
             async for chunk in zip_stream.stream():
@@ -104,15 +105,18 @@ class ValheimServer:
             # Update
             if was_running:
                 await self.start_server()
-    
-    async def list_worlds(self, request: web.Request) -> web.Response:
+
+    async def get_worlds(self) -> List[str]:
         worlds_path = Path(self.worlds_dir)
         world_names = set()
         world_file_extensions = {".fwl", ".db"}
-        for file_path in worlds_path.glob("**/*"):
+        async for file_path in worlds_path.glob("**/*"):
             if file_path.suffix in world_file_extensions:
                 world_names.add(file_path.stem)
-        return web.json_response(sorted(world_names))
+        return sorted(world_names)
+
+    async def list_worlds(self, request: web.Request) -> web.Response:
+        return web.json_response(await self.get_worlds())
 
     def run_web(self) -> None:
         app = web.Application()
@@ -122,7 +126,7 @@ class ValheimServer:
                 web.post("/stop", self.stop),
                 web.get("/backup", self.backup),
                 web.post("/update", self.update),
-                web.get("/worlds", self.list_worlds)
+                web.get("/worlds", self.list_worlds),
             ]
         )
         port = os.environ.get("PORT", 8080)

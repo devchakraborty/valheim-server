@@ -9,6 +9,7 @@ python = "^3.9"
 aiohttp = "^3.7.4"
 aiozipstream = "^0.4"
 aiofiles = "^0.6.0"
+aiopath = "0.5.x"
 
 [tool.poetry.dev-dependencies]
 
