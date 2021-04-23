@@ -37,6 +37,18 @@ RUN pip3.9 install poetry
 COPY pyproject.toml ./
 RUN python3.9 -m poetry install
 COPY server.py ./
+COPY start_server_bepinex.sh ./
 
 ENTRYPOINT [ "python3.9", "-m", "poetry", "run", "python", "server.py" ]
+
+# Web server port
 EXPOSE 8080/tcp
+
+# Valheim ports
+EXPOSE 2456-2457/tcp
+EXPOSE 27015-27030/tcp
+EXPOSE 27036-27037/tcp
+EXPOSE 2456-2457/udp
+EXPOSE 4380/udp
+EXPOSE 27000-27031/udp
+EXPOSE 27036/udp

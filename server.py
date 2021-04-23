@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import time
 import traceback
 
 from dataclasses import dataclass
@@ -18,6 +19,12 @@ from zipstream import AioZipStream
 
 SERVER_START_SCRIPT = "start_server_bepinex.sh"
 DEFAULT_CONFIG_FILE = "config.json"
+STARTUP_TIMEOUT_SECS = 120
+VALHEIM_TCP_PORTS = (
+    list(range(2456, 2457 + 1))
+    + list(range(27015, 27030 + 1))
+    + list(range(27036, 27037 + 1))
+)
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -40,7 +47,8 @@ class ServerConfig:
     async def load(cls, filename: str = DEFAULT_CONFIG_FILE) -> "ServerConfig":
         path = Path(filename)
         if await path.exists():
-            return cls(**json.load(filename))
+            with path.open("r") as config_file:
+                return cls(**json.load(config_file))
         else:
             config = cls()
             logging.warning(f"Creating new config: {config}")
@@ -49,7 +57,7 @@ class ServerConfig:
     async def dump(self, filename: str = DEFAULT_CONFIG_FILE) -> None:
         path = Path(filename)
         async with path.open("w") as config_file:
-            json.dump(dataclasses.asdict(self), config_file)
+            await config_file.write(json.dumps(dataclasses.asdict(self)))
 
 
 @dataclass
@@ -102,6 +110,23 @@ class ValheimServer:
             stdout=self.log_file,
             stderr=self.log_file,
         )
+
+        server_listening = False
+
+        timeout_time = time.time() + STARTUP_TIMEOUT_SECS
+        while time.time() < timeout_time:
+            if await is_udp_port_open(self.config.port):
+                server_listening = True
+                break
+            await asyncio.sleep(1)
+
+        if server_listening:
+            logging.info(f"Valheim server ready on port {self.config.port}")
+        else:
+            await self.stop_server()
+            raise RuntimeError(
+                f"Server did not start up within {STARTUP_TIMEOUT_SECS} seconds"
+            )
         self.status = ServerStatus.RUNNING
 
     async def stop(self, request: web.Request) -> web.Response:
@@ -193,6 +218,8 @@ async def json_responses(request: web.Request, handler) -> web.Response:
     # Convert response body to a JSON payload
     try:
         response = await handler(request)
+        if response.content_type not in ("application/json", "text/plain"):
+            return response
         response_body = response.body
         if isinstance(response_body, bytes):
             response_body = response_body.decode(response.charset)
@@ -213,6 +240,14 @@ async def json_responses(request: web.Request, handler) -> web.Response:
             {"status": 500, "error": traceback.format_exception(*sys.exc_info())}
         ).encode("utf-8")
         raise server_error
+
+
+async def is_udp_port_open(port: int) -> bool:
+    ss_proc = await asyncio.create_subprocess_shell(
+        "ss -lnu", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _stderr = await ss_proc.communicate()
+    return f":{port} " in stdout.decode()
 
 
 if __name__ == "__main__":

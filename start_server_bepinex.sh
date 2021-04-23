@@ -16,11 +16,11 @@ executable_name="valheim_server.x86_64"
 # EDIT THIS: Valheim server parameters
 # Can be overriden by script parameters named exactly like the ones for the Valheim executable
 # (e.g. ./start_server_bepinex.sh -name "MyValheimPlusServer" -password "somethingsafe" -port 2456 -world "myworld" -public 1)
-server_name="ValheimPlus"
-server_password="password"
-server_port=2456
-server_world="world"
-server_public=1
+# server_name="ValheimPlus"
+# server_password="password"
+# server_port=2456
+# server_world="world"
+# server_public=1
 server_savedir="$HOME/.config/unity3d/IronGate/Valheim"
 
 # The rest is automatically handled by BepInEx for Valheim+
