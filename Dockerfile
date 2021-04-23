@@ -38,6 +38,7 @@ COPY pyproject.toml ./
 RUN python3.9 -m poetry install
 COPY server.py ./
 COPY start_server_bepinex.sh ./
+COPY update.sh ./
 
 ENTRYPOINT [ "python3.9", "-m", "poetry", "run", "python", "server.py" ]
 

@@ -200,14 +200,17 @@ class ValheimServer:
             if was_running:
                 await self.stop_server()
 
-            process = await asyncio.create_subprocess_shell(
+            update_process = await asyncio.create_subprocess_shell(
                 str(Path(self.server_dir) / Path(UPDATE_SCRIPT)),
-                stdout=self.log_file,
-                stderr=self.log_file,
+                stdout=self.update_log_file,
+                stderr=self.update_log_file,
             )
+            await update_process.wait()
 
             if was_running:
                 await self.start_server()
+
+            return web.HTTPOk(text="Server updated")
 
     async def get_worlds(self) -> List[str]:
         worlds_path = Path(self.worlds_dir)
