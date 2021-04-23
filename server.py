@@ -4,10 +4,12 @@ import dataclasses
 import json
 import logging
 import os
+import sys
+import traceback
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Optional
+from typing import List, Optional, ClassVar
 from asyncio.subprocess import Process, STDOUT
 
 from aiohttp import web
@@ -23,8 +25,11 @@ class ServerStatus(Enum):
     STOPPED = auto()
     RUNNING = auto()
 
+
 @dataclass
 class ServerConfig:
+    FIELD_PREFIX: ClassVar[str] = "server_"
+
     name: str = "Valheim Server"
     password: str = "secret"
     port: int = 27000
@@ -40,10 +45,10 @@ class ServerConfig:
             config = cls()
             logging.warning(f"Creating new config: {config}")
             return config
-    
+
     async def dump(self, filename: str = DEFAULT_CONFIG_FILE) -> None:
         path = Path(filename)
-        async with path.open() as config_file:
+        async with path.open("w") as config_file:
             json.dump(dataclasses.asdict(self), config_file)
 
 
@@ -56,6 +61,7 @@ class ValheimServer:
     def __post_init__(self) -> None:
         self.lock = asyncio.Lock()
         self.status = ServerStatus.STOPPED
+        self.config: Optional[ServerConfig] = None
         self.process: Optional[Process] = None
         self.log_file = open(self.log_file, "w")
 
@@ -64,12 +70,29 @@ class ValheimServer:
             if self.status == ServerStatus.RUNNING:
                 raise web.HTTPConflict(text="Server already running")
 
+            try:
+                request_body = await request.json()
+            except json.JSONDecodeError:
+                request_body = {}
+            server_config = await ServerConfig.load()
+            for field in dataclasses.fields(server_config):
+                if field.name in request_body:
+                    setattr(server_config, field.name, request_body[field.name])
+
+            await self.configure_server(server_config)
             await self.start_server()
+
+            logging.debug(f"Started server with configuration: {self.config}")
 
             return web.HTTPOk(text="Started server")
 
     async def configure_server(self, config: ServerConfig) -> None:
-        path = Path()
+        await config.dump()
+        for field in dataclasses.fields(ServerConfig):
+            os.environ[f"{ServerConfig.FIELD_PREFIX}{field.name}"] = str(
+                getattr(config, field.name)
+            )
+        self.config = config
 
     async def start_server(self) -> None:
         logging.info("Starting server")
@@ -95,6 +118,7 @@ class ValheimServer:
         self.process.terminate()
         await self.process.wait()
         self.status = ServerStatus.STOPPED
+        self.config = None
 
     async def backup(self, request: web.Request) -> web.Response:
         async with self.lock:
@@ -163,6 +187,7 @@ class ValheimServer:
         logging.info(f"Starting web server on port: {port}")
         web.run_app(app, port=port)
 
+
 @web.middleware
 async def json_responses(request: web.Request, handler) -> web.Response:
     # Convert response body to a JSON payload
@@ -173,21 +198,22 @@ async def json_responses(request: web.Request, handler) -> web.Response:
             response_body = response_body.decode(response.charset)
         if response.content_type == "application/json":
             response_body = json.loads(response_body)
-        response.body = json.dumps({
-            "status": response.status,
-            "result": response_body,
-        }).encode("utf-8")
+        response.body = json.dumps(
+            {"status": response.status, "result": response_body,}
+        ).encode("utf-8")
         return response
     except web.HTTPException as ex:
-        ex.body = json.dumps({
-            "status": ex.status_code,
-            "message": ex.body.decode("utf-8"),
-        }).encode("utf-8")
+        ex.body = json.dumps(
+            {"status": ex.status_code, "message": ex.body.decode("utf-8"),}
+        ).encode("utf-8")
         raise ex
     except Exception as ex:
         server_error = web.HTTPInternalServerError()
-        server_error.body = str(ex).encode("utf-8")
+        server_error.body = json.dumps(
+            {"status": 500, "error": traceback.format_exception(*sys.exc_info())}
+        ).encode("utf-8")
         raise server_error
+
 
 if __name__ == "__main__":
     server = ValheimServer()
