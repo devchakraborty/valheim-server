@@ -4,6 +4,7 @@ import dataclasses
 import json
 import logging
 import os
+import signal
 import sys
 import time
 import traceback
@@ -18,6 +19,7 @@ from aiopath import AsyncPath as Path
 from zipstream import AioZipStream
 
 SERVER_START_SCRIPT = "start_server_bepinex.sh"
+UPDATE_SCRIPT = "update.sh"
 DEFAULT_CONFIG_FILE = "config.json"
 STARTUP_TIMEOUT_SECS = 120
 VALHEIM_TCP_PORTS = (
@@ -64,14 +66,20 @@ class ServerConfig:
 class ValheimServer:
     server_dir: str = "/home/valheim/server"
     worlds_dir: str = "/home/valheim/.config/unity3d/IronGate/Valheim/worlds"
-    log_file: str = "valheim.log"
+    log_file_path: str = "valheim.log"
+    update_log_file_path: str = "valheim.update.log"
 
     def __post_init__(self) -> None:
         self.lock = asyncio.Lock()
         self.status = ServerStatus.STOPPED
         self.config: Optional[ServerConfig] = None
         self.process: Optional[Process] = None
-        self.log_file = open(self.log_file, "w")
+        self.log_file = open(self.log_file_path, "w")
+        self.update_log_file = open(self.update_log_file_path, "w")
+
+        atexit.register(self.log_file.close)
+        atexit.register(self.update_log_file.close)
+        atexit.register(self.stop_server_sync)
 
     async def start(self, request: web.Request) -> web.Response:
         async with self.lock:
@@ -140,8 +148,18 @@ class ValheimServer:
 
     async def stop_server(self) -> None:
         logging.info("Stopping server")
-        self.process.terminate()
-        await self.process.wait()
+        if self.process is not None:
+            self.process.terminate()
+            await self.process.wait()
+            self.process = None
+        self.status = ServerStatus.STOPPED
+        self.config = None
+
+    def stop_server_sync(self) -> None:
+        logging.info("Stopping server")
+        if self.process is not None:
+            os.kill(self.process.pid, signal.SIGTERM)
+            self.process = None
         self.status = ServerStatus.STOPPED
         self.config = None
 
@@ -181,7 +199,13 @@ class ValheimServer:
             was_running = self.status == ServerStatus.RUNNING
             if was_running:
                 await self.stop_server()
-            # Update
+
+            process = await asyncio.create_subprocess_shell(
+                str(Path(self.server_dir) / Path(UPDATE_SCRIPT)),
+                stdout=self.log_file,
+                stderr=self.log_file,
+            )
+
             if was_running:
                 await self.start_server()
 
