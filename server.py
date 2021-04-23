@@ -1,5 +1,7 @@
 import asyncio
 import atexit
+import dataclasses
+import json
 import logging
 import os
 
@@ -13,12 +15,36 @@ from aiopath import AsyncPath as Path
 from zipstream import AioZipStream
 
 SERVER_START_SCRIPT = "start_server_bepinex.sh"
+DEFAULT_CONFIG_FILE = "config.json"
 logging.basicConfig(level=logging.DEBUG)
 
 
-class ServerStatus:
+class ServerStatus(Enum):
     STOPPED = auto()
     RUNNING = auto()
+
+@dataclass
+class ServerConfig:
+    name: str = "Valheim Server"
+    password: str = "secret"
+    port: int = 27000
+    world: str = "world"
+    public: int = 1
+
+    @classmethod
+    async def load(cls, filename: str = DEFAULT_CONFIG_FILE) -> "ServerConfig":
+        path = Path(filename)
+        if await path.exists():
+            return cls(**json.load(filename))
+        else:
+            config = cls()
+            logging.warning(f"Creating new config: {config}")
+            return config
+    
+    async def dump(self, filename: str = DEFAULT_CONFIG_FILE) -> None:
+        path = Path(filename)
+        async with path.open() as config_file:
+            json.dump(dataclasses.asdict(self), config_file)
 
 
 @dataclass
@@ -36,14 +62,18 @@ class ValheimServer:
     async def start(self, request: web.Request) -> web.Response:
         async with self.lock:
             if self.status == ServerStatus.RUNNING:
-                raise web.HTTPConflict(reason="Server already running")
+                raise web.HTTPConflict(text="Server already running")
 
             await self.start_server()
 
-            return web.HTTPOk(reason="Started server")
+            return web.HTTPOk(text="Started server")
+
+    async def configure_server(self, config: ServerConfig) -> None:
+        path = Path()
 
     async def start_server(self) -> None:
         logging.info("Starting server")
+
         self.process = await asyncio.create_subprocess_shell(
             str(Path(self.server_dir) / Path(SERVER_START_SCRIPT)),
             stdout=self.log_file,
@@ -54,11 +84,11 @@ class ValheimServer:
     async def stop(self, request: web.Request) -> web.Response:
         async with self.lock:
             if self.status == ServerStatus.STOPPED:
-                raise web.HTTPConflict(reason="Server already stopped")
+                raise web.HTTPConflict(text="Server already stopped")
 
             await self.stop_server()
 
-            return web.HTTPOk(reason="Server stopped")
+            return web.HTTPOk(text="Server stopped")
 
     async def stop_server(self) -> None:
         logging.info("Stopping server")
@@ -119,7 +149,7 @@ class ValheimServer:
         return web.json_response(await self.get_worlds())
 
     def run_web(self) -> None:
-        app = web.Application()
+        app = web.Application(middlewares=[json_responses])
         app.add_routes(
             [
                 web.post("/start", self.start),
@@ -133,6 +163,31 @@ class ValheimServer:
         logging.info(f"Starting web server on port: {port}")
         web.run_app(app, port=port)
 
+@web.middleware
+async def json_responses(request: web.Request, handler) -> web.Response:
+    # Convert response body to a JSON payload
+    try:
+        response = await handler(request)
+        response_body = response.body
+        if isinstance(response_body, bytes):
+            response_body = response_body.decode(response.charset)
+        if response.content_type == "application/json":
+            response_body = json.loads(response_body)
+        response.body = json.dumps({
+            "status": response.status,
+            "result": response_body,
+        }).encode("utf-8")
+        return response
+    except web.HTTPException as ex:
+        ex.body = json.dumps({
+            "status": ex.status_code,
+            "message": ex.body.decode("utf-8"),
+        }).encode("utf-8")
+        raise ex
+    except Exception as ex:
+        server_error = web.HTTPInternalServerError()
+        server_error.body = str(ex).encode("utf-8")
+        raise server_error
 
 if __name__ == "__main__":
     server = ValheimServer()
